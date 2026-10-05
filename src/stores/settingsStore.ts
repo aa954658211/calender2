@@ -17,7 +17,7 @@ async function loadFromDb(): Promise<UserSettings> {
   const row = await db.getFirstAsync<any>('SELECT value FROM settings WHERE key = ?', [SETTINGS_KEY]);
   if (row) {
     try {
-      return JSON.parse(row.value);
+      return { ...DEFAULT_SETTINGS, ...JSON.parse(row.value) };
     } catch {
       return DEFAULT_SETTINGS;
     }

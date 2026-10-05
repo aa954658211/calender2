@@ -11,17 +11,23 @@ export interface HabitInput {
   reminderEnabled?: boolean;
   reminderTime?: string | null;
   reminderDays?: number[];
+  reminderEndTime?: string | null;
+  dailyTarget?: number;
+  category?: string | null;
 }
+
+export type HabitUpdate = Partial<Pick<
+  Habit,
+  'name' | 'icon' | 'color' | 'targetTime' | 'reminderEnabled' | 'reminderTime' | 'reminderDays' | 'reminderEndTime' | 'dailyTarget' | 'category' | 'freezeCards'
+>>;
 
 interface HabitStore {
   habits: Habit[];
   loading: boolean;
   loadHabits: () => Promise<void>;
   addHabit: (data: HabitInput) => Promise<Habit>;
-  updateHabit: (
-    id: string,
-    data: Partial<Pick<Habit, 'name' | 'icon' | 'color' | 'targetTime' | 'reminderEnabled' | 'reminderTime' | 'reminderDays'>>
-  ) => Promise<void>;
+  updateHabit: (id: string, data: HabitUpdate) => Promise<void>;
+  setFreezeCards: (id: string, count: number) => Promise<void>;
   deleteHabit: (id: string) => Promise<void>;
   getHabitById: (id: string) => Habit | undefined;
 }
@@ -50,6 +56,9 @@ export const useHabitStore = create<HabitStore>((set, get) => ({
       reminderEnabled: data.reminderEnabled ?? false,
       reminderTime: data.reminderTime ?? null,
       reminderDays: data.reminderDays ?? [],
+      reminderEndTime: data.reminderEndTime ?? null,
+      dailyTarget: data.dailyTarget ?? 1,
+      category: data.category ?? null,
     });
     const habits = [...get().habits, habit];
     set({ habits });
@@ -71,6 +80,16 @@ export const useHabitStore = create<HabitStore>((set, get) => ({
     const habits = get().habits.filter((h) => h.id !== id);
     set({ habits });
     await syncNotifications(habits);
+  },
+
+  // 仅更新保护卡数量（不触发通知重新调度）
+  setFreezeCards: async (id, count) => {
+    await habitRepository.update(id, { freezeCards: count });
+    set((state) => ({
+      habits: state.habits.map((h) =>
+        h.id === id ? { ...h, freezeCards: count } : h
+      ),
+    }));
   },
 
   getHabitById: (id) => {

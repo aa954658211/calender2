@@ -1,12 +1,14 @@
 import { useEffect } from 'react';
-import { Stack } from 'expo-router';
+import { Stack, useRouter } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
+import * as Notifications from 'expo-notifications';
 import { useHabitStore } from '../src/stores/habitStore';
 import { useCheckinStore } from '../src/stores/checkinStore';
 import { useSettingsStore } from '../src/stores/settingsStore';
 import { notificationService } from '../src/services/notificationService';
 
 export default function RootLayout() {
+  const router = useRouter();
   const loadHabits = useHabitStore((s) => s.loadHabits);
   const loadToday = useCheckinStore((s) => s.loadToday);
   const loadSettings = useSettingsStore((s) => s.loadSettings);
@@ -23,6 +25,30 @@ export default function RootLayout() {
       await notificationService.restoreNotifications(currentHabits);
     }
     init();
+
+    // 点击通知直达项目详情
+    const goToHabit = (habitId: unknown) => {
+      if (typeof habitId === 'string' && habitId) {
+        router.push(`/detail/${habitId}`);
+      }
+    };
+    const sub = Notifications.addNotificationResponseReceivedListener((response) => {
+      goToHabit(response.notification.request.content.data?.habitId);
+    });
+    // 处理冷启动时点击通知进入的情况
+    (async () => {
+      try {
+        const last = await Notifications.getLastNotificationResponseAsync();
+        if (last) {
+          await Notifications.clearLastNotificationResponseAsync();
+          goToHabit(last.notification.request.content.data?.habitId);
+        }
+      } catch (_e) {
+        // ignore
+      }
+    })();
+
+    return () => sub.remove();
   }, []);
 
   return (

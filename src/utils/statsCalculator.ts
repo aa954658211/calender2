@@ -1,6 +1,30 @@
 import { format, subDays, startOfWeek, endOfWeek, eachDayOfInterval, parseISO } from 'date-fns';
 import type { CheckinRecord, HabitStats } from '../models/types';
 
+// 将记录拆分为「真正完成日」与「保护卡日」
+// targets: habitId -> 每日目标次数（默认 1）
+export function splitCompletion(
+  records: CheckinRecord[],
+  targets: Record<string, number> = {},
+): { completed: string[]; protectedDates: string[] } {
+  const completed = new Set<string>();
+  const protectedSet = new Set<string>();
+  for (const r of records) {
+    if (r.recordType === 'freeze') {
+      protectedSet.add(r.date);
+      continue;
+    }
+    const target = targets[r.habitId] ?? 1;
+    if ((r.times ?? 1) >= target) completed.add(r.date);
+  }
+  return { completed: [...completed], protectedDates: [...protectedSet] };
+}
+
+// 连续天序列＝完成日 ∪ 保护日（保护日不额外拉长连续，仅桥接不断）
+export function streakDates(completed: string[], protectedDates: string[]): string[] {
+  return [...new Set([...completed, ...protectedDates])];
+}
+
 export function calculateCurrentStreak(dates: string[]): number {
   if (dates.length === 0) return 0;
 

@@ -19,21 +19,25 @@ export const habitRepository = {
     return row ? mapRowToHabit(row) : null;
   },
 
-  async create(habit: Omit<Habit, 'id' | 'createdAt' | 'updatedAt' | 'archived' | 'reminderEnabled' | 'reminderTime' | 'reminderDays'> & Partial<Pick<Habit, 'reminderEnabled' | 'reminderTime' | 'reminderDays'>>): Promise<Habit> {
+  async create(habit: Omit<Habit, 'id' | 'createdAt' | 'updatedAt' | 'archived' | 'reminderEnabled' | 'reminderTime' | 'reminderDays' | 'reminderEndTime' | 'dailyTarget' | 'category' | 'freezeCards'> & Partial<Pick<Habit, 'reminderEnabled' | 'reminderTime' | 'reminderDays' | 'reminderEndTime' | 'dailyTarget' | 'category' | 'freezeCards'>>): Promise<Habit> {
     const db = await getDatabase();
     const id = generateId();
     const now = new Date().toISOString();
     const reminderEnabled = habit.reminderEnabled ?? false;
     const reminderTime = habit.reminderTime ?? null;
     const reminderDays = habit.reminderDays ?? [];
+    const reminderEndTime = habit.reminderEndTime ?? null;
+    const dailyTarget = habit.dailyTarget ?? 1;
+    const category = habit.category ?? null;
+    const freezeCards = habit.freezeCards ?? 0;
     await db.runAsync(
-      'INSERT INTO habits (id, name, icon, color, target_time, created_at, updated_at, archived, reminder_enabled, reminder_time, reminder_days) VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?)',
-      [id, habit.name, habit.icon, habit.color, habit.targetTime, now, now, reminderEnabled ? 1 : 0, reminderTime, JSON.stringify(reminderDays)]
+      'INSERT INTO habits (id, name, icon, color, target_time, created_at, updated_at, archived, reminder_enabled, reminder_time, reminder_days, reminder_end_time, daily_target, category, freeze_cards) VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?, ?)',
+      [id, habit.name, habit.icon, habit.color, habit.targetTime, now, now, reminderEnabled ? 1 : 0, reminderTime, JSON.stringify(reminderDays), reminderEndTime, dailyTarget, category, freezeCards]
     );
-    return { id, name: habit.name, icon: habit.icon, color: habit.color, targetTime: habit.targetTime, createdAt: now, updatedAt: now, archived: false, reminderEnabled, reminderTime, reminderDays };
+    return { id, name: habit.name, icon: habit.icon, color: habit.color, targetTime: habit.targetTime, createdAt: now, updatedAt: now, archived: false, reminderEnabled, reminderTime, reminderDays, reminderEndTime, dailyTarget, category, freezeCards };
   },
 
-  async update(id: string, data: Partial<Pick<Habit, 'name' | 'icon' | 'color' | 'targetTime' | 'reminderEnabled' | 'reminderTime' | 'reminderDays'>>): Promise<void> {
+  async update(id: string, data: Partial<Pick<Habit, 'name' | 'icon' | 'color' | 'targetTime' | 'reminderEnabled' | 'reminderTime' | 'reminderDays' | 'reminderEndTime' | 'dailyTarget' | 'category' | 'freezeCards'>>): Promise<void> {
     const db = await getDatabase();
     const now = new Date().toISOString();
     const fields: string[] = [];
@@ -46,6 +50,10 @@ export const habitRepository = {
     if (data.reminderEnabled !== undefined) { fields.push('reminder_enabled = ?'); values.push(data.reminderEnabled ? 1 : 0); }
     if (data.reminderTime !== undefined) { fields.push('reminder_time = ?'); values.push(data.reminderTime); }
     if (data.reminderDays !== undefined) { fields.push('reminder_days = ?'); values.push(JSON.stringify(data.reminderDays)); }
+    if (data.reminderEndTime !== undefined) { fields.push('reminder_end_time = ?'); values.push(data.reminderEndTime); }
+    if (data.dailyTarget !== undefined) { fields.push('daily_target = ?'); values.push(data.dailyTarget); }
+    if (data.category !== undefined) { fields.push('category = ?'); values.push(data.category); }
+    if (data.freezeCards !== undefined) { fields.push('freeze_cards = ?'); values.push(data.freezeCards); }
 
     fields.push('updated_at = ?');
     values.push(now);
@@ -90,6 +98,10 @@ function mapRowToHabit(row: any): Habit {
     reminderEnabled: row.reminder_enabled === 1,
     reminderTime: row.reminder_time ?? null,
     reminderDays,
+    reminderEndTime: row.reminder_end_time ?? null,
+    dailyTarget: row.daily_target ?? 1,
+    category: row.category ?? null,
+    freezeCards: row.freeze_cards ?? 0,
   };
 }
 

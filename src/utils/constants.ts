@@ -17,4 +17,9 @@ export const DEFAULT_SETTINGS: import('@/models/types').UserSettings = {
   reminderHour: 20,
   reminderMinute: 0,
   weekStartsOn: 1,
+  makeupEnabled: true,
+  makeupQuota: 5,
 };
+
+// 预置分组标签
+export const PRESET_CATEGORIES = ['生活', '运动', '学习', '工作', '健康', '其它'];

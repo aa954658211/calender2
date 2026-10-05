@@ -15,7 +15,9 @@ Notifications.setNotificationHandler({
 });
 
 const CHANNEL_ID = 'checkin-reminder';
-const SCHEDULE_DAYS = 30; // 每个项目向后调度未来30天内匹配的提醒
+const MAX_PENDING_BUDGET = 45; // Android 待处理通知上限约 60，留出安全余量
+const MAX_SPAN_DAYS = 14; // 排程窗口上限：每次启动/保存时滚动补排
+const MAX_SPAN_DAYS_SINGLE = 30; // 全部项目都是单提醒点时维持长窗口
 
 // 星期显示顺序：一~日，对应 JS getDay() 的 1..6,0
 export const WEEKDAY_OPTIONS: { label: string; value: number }[] = [
@@ -38,6 +40,65 @@ export function parseReminderTime(time: string | null): { hour: number; minute: 
     hour: Number.isFinite(h) ? h : 20,
     minute: Number.isFinite(m) ? m : 0,
   };
+}
+
+export interface ReminderSlot {
+  hour: number;
+  minute: number;
+  index: number; // 第几次提醒，从 1 开始
+}
+
+// 序列化重排：并发的 cancel+重建 交错会留下重复通知，因此同时只跑一个，
+// 期间新请求只保留最新的项目快照（合并去抖）
+let queuedHabits: Habit[] | null = null;
+let rescheduleRunning: Promise<void> | null = null;
+
+/**
+ * 计算一个项目每天的提醒时间点：
+ * - 单次项目或仅设了单个时间 → 1 个提醒点
+ * - 多次项目且设了时段结束时间 → 在 [开始, 结束] 内均分 N 个点（就近整分钟）
+ */
+export function computeReminderSlots(habit: Habit): ReminderSlot[] {
+  const n = Math.max(1, habit.dailyTarget || 1);
+  const start = parseReminderTime(habit.reminderTime);
+  if (n === 1 || !habit.reminderEndTime) {
+    return [{ ...start, index: 1 }];
+  }
+  const end = parseReminderTime(habit.reminderEndTime);
+  const startMin = start.hour * 60 + start.minute;
+  let endMin = end.hour * 60 + end.minute;
+  if (endMin <= startMin) endMin = Math.min(23 * 60 + 59, startMin + 60); // 非法时段兜底：跨度 1 小时
+  const step = (endMin - startMin) / (n - 1);
+  const slots: ReminderSlot[] = [];
+  const used = new Set<number>();
+  for (let i = 0; i < n; i++) {
+    let total = Math.round(startMin + step * i); // 就近整分钟
+    // 取整碰撞时顺移 1 分钟，避免同一分钟多条提醒
+    while (used.has(total)) total += 1;
+    if (total > 23 * 60 + 59) continue; // 超出当天上限则放弃该点
+    used.add(total);
+    slots.push({ hour: Math.floor(total / 60), minute: total % 60, index: 0 });
+  }
+  slots.forEach((s, i) => { s.index = i + 1; });
+  return slots;
+}
+
+// 项目每天应发的提醒条数（考虑星期循环的比例）
+function dailyNotificationWeight(habit: Habit): number {
+  const slots = computeReminderSlots(habit);
+  const days = habit.reminderDays ?? [];
+  const dayFactor = days.length === 0 || days.length >= 7 ? 1 : days.length / 7;
+  return slots.length * dayFactor;
+}
+
+// 根据所有启用项目的总预算，计算统一的排程窗口天数
+export function computeSpanDays(habits: Habit[]): number {
+  const enabled = habits.filter((h) => h.reminderEnabled && h.reminderTime && !h.archived);
+  if (enabled.length === 0) return MAX_SPAN_DAYS_SINGLE;
+  const totalWeight = enabled.reduce((sum, h) => sum + dailyNotificationWeight(h), 0);
+  const hasMulti = enabled.some((h) => computeReminderSlots(h).length > 1);
+  const cap = hasMulti ? MAX_SPAN_DAYS : MAX_SPAN_DAYS_SINGLE;
+  return Math.max(1, Math.min(cap, Math.floor(MAX_PENDING_BUDGET / Math.max(1, totalWeight))));
 }
 
 export const notificationService = {
@@ -85,7 +146,7 @@ export const notificationService = {
    * 获取未来 N 天内匹配指定星期的提醒时间点
    * days 为空数组表示每天提醒
    */
-  getDatesForDays(hour: number, minute: number, days: number[], spanDays: number = SCHEDULE_DAYS): Date[] {
+  getDatesForDays(hour: number, minute: number, days: number[], spanDays: number): Date[] {
     const dates: Date[] = [];
     const now = new Date();
     const everyDay = days.length === 0 || days.length >= 7;
@@ -103,10 +164,31 @@ export const notificationService = {
   },
 
   /**
-   * 根据所有项目的提醒设置，重新调度全部通知
-   * 采用「先全部取消，再全部重建」的策略，简单且可靠
+   * 根据所有项目的提醒设置，重新调度全部通知。
+   * 通过串行队列执行：并发触发时自动合并，只按最新设置重建一次，
+   * 避免两个重排流程交错产生重复通知。
    */
-  async rescheduleAll(habits: Habit[]): Promise<boolean> {
+  async rescheduleAll(habits: Habit[]): Promise<void> {
+    queuedHabits = habits;
+    if (rescheduleRunning) return rescheduleRunning;
+    rescheduleRunning = (async () => {
+      try {
+        while (queuedHabits) {
+          const snapshot = queuedHabits;
+          queuedHabits = null;
+          await this.rescheduleNow(snapshot);
+        }
+      } finally {
+        rescheduleRunning = null;
+      }
+    })();
+    return rescheduleRunning;
+  },
+
+  /**
+   * 实际执行「先全部取消，再全部重建」，仅供串行队列调用
+   */
+  async rescheduleNow(habits: Habit[]): Promise<void> {
     try {
       await this.setupChannel();
       await this.cancelAll();
@@ -119,61 +201,62 @@ export const notificationService = {
         await this.requestPermissions();
       }
 
-      for (const habit of enabled) {
-        const { hour, minute } = parseReminderTime(habit.reminderTime);
-        const dates = this.getDatesForDays(hour, minute, habit.reminderDays ?? []);
+      const spanDays = computeSpanDays(habits);
+      let scheduled = 0;
 
-        for (const date of dates) {
-          await Notifications.scheduleNotificationAsync({
-            content: {
-              title: `${habit.name} 打卡提醒`,
-              body: '到时间啦，坚持打卡，别让它断在今天！',
-              sound: true,
-              priority: Notifications.AndroidNotificationPriority.MAX,
-              data: { habitId: habit.id },
-              sticky: false,
-              autoDismiss: true,
-            },
-            trigger: {
-              type: 'date',
-              date,
-              channelId: CHANNEL_ID,
-            } as any,
-          });
+      for (const habit of enabled) {
+        const slots = computeReminderSlots(habit);
+        const isMulti = slots.length > 1;
+
+        for (const slot of slots) {
+          const dates = this.getDatesForDays(slot.hour, slot.minute, habit.reminderDays ?? [], spanDays);
+          const title = isMulti
+            ? `${habit.name} · 第 ${slot.index}/${slots.length} 次`
+            : `${habit.name} 打卡提醒`;
+          const body = isMulti
+            ? (slot.index === slots.length
+                ? '今天最后一次，完成后今天就圆满啦！'
+                : '按节奏完成一次，别堆到最后～')
+            : '到时间啦，坚持打卡，别让它断在今天！';
+
+          for (const date of dates) {
+            await Notifications.scheduleNotificationAsync({
+              content: {
+                title,
+                body,
+                sound: true,
+                priority: Notifications.AndroidNotificationPriority.MAX,
+                data: { habitId: habit.id },
+                sticky: false,
+                autoDismiss: true,
+              },
+              trigger: {
+                type: 'date',
+                date,
+                channelId: CHANNEL_ID,
+              } as any,
+            });
+            scheduled++;
+          }
         }
       }
 
-      console.log(`已按 ${enabled.length} 个项目的提醒设置完成调度`);
-      return true;
+      console.log(`已调度 ${scheduled} 条提醒（${enabled.length} 个项目，窗口 ${spanDays} 天）`);
     } catch (error) {
       console.error('调度提醒失败:', error);
-      return false;
     }
   },
 
   /**
-   * 应用启动时恢复通知调度
-   * 若未来通知剩余过少（被系统清理），则依据项目设置重建
+   * 应用启动时恢复通知调度：
+   * 排程窗口按预算动态缩短，因此每次启动直接重建，保证窗口始终被填满
    */
   async restoreNotifications(habits: Habit[]) {
     const hasEnabled = habits.some(
       (h) => h.reminderEnabled && h.reminderTime && !h.archived
     );
-    if (!hasEnabled) {
-      await this.cancelAll();
-      return;
-    }
-
-    try {
-      const pending = await Notifications.getAllScheduledNotificationsAsync();
-      // 每个项目每天最多一个通知，剩余不足则重建
-      if (pending.length < 3) {
-        console.log(`剩余通知不足(${pending.length})，重新调度...`);
-        await this.rescheduleAll(habits);
-      }
-    } catch (error) {
-      console.error('恢复通知失败:', error);
-    }
+    // 无启用项目时走同一个串行队列取消，避免与进行中的重排交错
+    await this.rescheduleAll(hasEnabled ? habits : []);
   },
 
   /**

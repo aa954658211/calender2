@@ -11,6 +11,8 @@ import {
   calculateLongestStreak,
   getWeeklyCompletionData,
   getHeatmapData,
+  splitCompletion,
+  streakDates,
 } from '../../src/utils/statsCalculator';
 import type { CheckinRecord } from '../../src/models/types';
 
@@ -48,11 +50,18 @@ export default function StatsScreen() {
     ? allRecords
     : allRecords.filter((r) => r.habitId === selectedHabitId);
 
-  const allDates = [...new Set(filteredRecords.map((r) => r.date))];
-  const currentStreak = calculateCurrentStreak(allDates);
-  const longestStreak = calculateLongestStreak(allDates);
-  const weeklyData = getWeeklyCompletionData(filteredRecords, selectedHabitId === 'all' ? habits.length : 1);
-  const heatmapData = getHeatmapData(filteredRecords, 35);
+  const targets: Record<string, number> = {};
+  habits.forEach((h) => { targets[h.id] = h.dailyTarget || 1; });
+  // 完成日才计入总数/完成率；连续口径包含保护日
+  const { completed, protectedDates } = splitCompletion(filteredRecords, targets);
+  const allDates = completed;
+  const currentStreak = calculateCurrentStreak(streakDates(completed, protectedDates));
+  const longestStreak = calculateLongestStreak(streakDates(completed, protectedDates));
+  const completedRecords = filteredRecords.filter(
+    (r) => r.recordType === 'checkin' && (r.times ?? 1) >= (targets[r.habitId] || 1)
+  );
+  const weeklyData = getWeeklyCompletionData(completedRecords, selectedHabitId === 'all' ? habits.length : 1);
+  const heatmapData = getHeatmapData(completedRecords, 35);
 
   return (
     <ScrollView style={styles.container} contentContainerStyle={styles.scrollContent}>
@@ -181,8 +190,9 @@ export default function StatsScreen() {
       <Text style={styles.sectionTitle}>各项目详情</Text>
       {habits.map((habit) => {
         const habitRecords = allRecords.filter((r) => r.habitId === habit.id);
-        const dates = habitRecords.map((r) => r.date);
-        const streak = calculateCurrentStreak(dates);
+        const split = splitCompletion(habitRecords, { [habit.id]: habit.dailyTarget || 1 });
+        const dates = split.completed;
+        const streak = calculateCurrentStreak(streakDates(split.completed, split.protectedDates));
         return (
           <TouchableOpacity
             key={habit.id}

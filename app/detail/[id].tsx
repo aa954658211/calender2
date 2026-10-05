@@ -1,17 +1,24 @@
 import React, { useState, useCallback } from 'react';
-import { View, Text, StyleSheet, ScrollView, TouchableOpacity, ActivityIndicator } from 'react-native';
+import {
+  View, Text, StyleSheet, ScrollView, TouchableOpacity, ActivityIndicator, Alert,
+} from 'react-native';
 import { useLocalSearchParams, useFocusEffect } from 'expo-router';
+import * as Haptics from 'expo-haptics';
 import { Ionicons } from '@expo/vector-icons';
 import { useHabitStore } from '../../src/stores/habitStore';
+import { useCheckinStore } from '../../src/stores/checkinStore';
 import { checkinRepository } from '../../src/db/repositories/checkinRepository';
 import { StatsCard } from '../../src/components/StatsCard';
+import { CheckinButton } from '../../src/components/CheckinButton';
 import {
   calculateCurrentStreak,
   calculateLongestStreak,
   calculateCompletionRate,
   getHeatmapData,
+  splitCompletion,
+  streakDates,
 } from '../../src/utils/statsCalculator';
-import { parseISO } from '../../src/utils/dateUtils';
+import { parseISO, formatDisplay } from '../../src/utils/dateUtils';
 import type { CheckinRecord } from '../../src/models/types';
 
 const PAGE_SIZE = 20;
@@ -29,6 +36,10 @@ export default function DetailScreen() {
   const [heatmapData, setHeatmapData] = useState<{ date: string; count: number }[]>([]);
   const [hasMoreRecords, setHasMoreRecords] = useState(false);
   const [loadingMore, setLoadingMore] = useState(false);
+  const [refreshKey, setRefreshKey] = useState(0);
+  const todayCheckins = useCheckinStore((s) => s.todayCheckins);
+  const increment = useCheckinStore((s) => s.increment);
+  const undo = useCheckinStore((s) => s.undo);
 
   // Reset pagination and reload first page on focus
   useFocusEffect(
@@ -38,6 +49,7 @@ export default function DetailScreen() {
 
       const load = async () => {
         try {
+          await useCheckinStore.getState().loadToday();
           const firstPage = await checkinRepository.getByHabitPaged(habit.id, PAGE_SIZE, 0);
           const total = await checkinRepository.countByHabit(habit.id);
           if (cancelled) return;
@@ -46,7 +58,11 @@ export default function DetailScreen() {
 
           // Stats need full history scope
           const allRecs = total > PAGE_SIZE ? await checkinRepository.getByHabit(habit.id) : firstPage;
-          const allDates = [...new Set(allRecs.map((r) => r.date))];
+          // 完成日 / 保护日拆分：连续口径含保护日，总数与完成率只计完成日
+          const target = habit.dailyTarget || 1;
+          const { completed, protectedDates } = splitCompletion(allRecs, { [habit.id]: target });
+          const allDates = [...new Set(completed)];
+          const datesForStreak = streakDates(completed, protectedDates);
           if (cancelled) return;
           const today = new Date();
           today.setHours(0, 0, 0, 0);
@@ -70,8 +86,8 @@ export default function DetailScreen() {
 
           setStats({
             totalDays: allDates.length,
-            currentStreak: calculateCurrentStreak(allDates),
-            longestStreak: calculateLongestStreak(allDates),
+            currentStreak: calculateCurrentStreak(datesForStreak),
+            longestStreak: calculateLongestStreak(datesForStreak),
             completionRate: Math.round(calculateCompletionRate(allDates, totalDays) * 100),
           });
 
@@ -83,7 +99,7 @@ export default function DetailScreen() {
 
       load();
       return () => { cancelled = true; };
-    }, [id, habit?.id])
+    }, [id, habit?.id, refreshKey])
   );
 
   const handleLoadMore = async () => {
@@ -102,6 +118,52 @@ export default function DetailScreen() {
 
   if (!habit) return null;
 
+  const target = habit.dailyTarget || 1;
+  const todayRecord = todayCheckins.get(habit.id);
+  const todayTimes = todayRecord && todayRecord.recordType === 'checkin' ? (todayRecord.times ?? 1) : 0;
+  const doneToday = todayTimes >= target;
+
+  const handleCheckin = async () => {
+    const result = await increment(habit);
+    switch (result.status) {
+      case 'incremented':
+        Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+        break;
+      case 'completed':
+        Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+        if (result.awarded) {
+          Alert.alert('🎉 获得保护卡', '已连续打卡 7 的倍数天，获得 1 张连续保护卡');
+        }
+        break;
+      case 'undone':
+        Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+        break;
+      case 'blocked_disabled':
+        Alert.alert('补卡已关闭', '可在 设置 中开启补卡功能');
+        break;
+      case 'blocked_quota':
+        Alert.alert('本月补卡额度已用完', '每月补卡次数有限，下月会重置');
+        break;
+      case 'blocked_future':
+        break;
+    }
+    setRefreshKey((k) => k + 1);
+  };
+
+  const handleUndoToday = async () => {
+    await undo(habit.id);
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    setRefreshKey((k) => k + 1);
+  };
+
+  const todayStatusText = todayRecord?.recordType === 'freeze'
+    ? '今日已使用保护卡，点右侧按钮可改为真实打卡'
+    : doneToday
+      ? '今日已完成 🎉'
+      : todayTimes > 0
+        ? `今日已打卡 ${todayTimes}/${target} 次，继续加油`
+        : '今日还未打卡，点右侧圆圈打卡';
+
   return (
     <ScrollView style={styles.container} contentContainerStyle={styles.scrollContent}>
       {/* Header */}
@@ -110,6 +172,15 @@ export default function DetailScreen() {
           <Ionicons name={habit.icon as any} size={32} color={habit.color} />
         </View>
         <Text style={styles.headerName}>{habit.name}</Text>
+        {(habit.dailyTarget || 1) > 1 && (
+          <Text style={styles.headerTarget}>每日 {habit.dailyTarget} 次</Text>
+        )}
+        <View style={styles.freezeRow}>
+          <Ionicons name="shield-checkmark-outline" size={14} color="#F39C12" />
+          <Text style={styles.freezeText}>
+            保护卡 {habit.freezeCards ?? 0} 张 · 每连续 7 天得 1 张，可在日历页填补漏打卡日
+          </Text>
+        </View>
         {habit.targetTime && (() => {
           const target = new Date(habit.targetTime + 'T00:00:00');
           const now = new Date();
@@ -125,6 +196,27 @@ export default function DetailScreen() {
             </View>
           );
         })()}
+      </View>
+
+      {/* Today check-in */}
+      <View style={styles.checkinCard}>
+        <View style={styles.checkinLeft}>
+          <Text style={styles.checkinDate}>{formatDisplay(new Date())}</Text>
+          <Text style={[styles.checkinStatus, { color: doneToday ? habit.color : '#888' }]}>
+            {todayStatusText}
+          </Text>
+          {todayTimes > 0 && (
+            <TouchableOpacity onPress={handleUndoToday}>
+              <Text style={styles.undoText}>撤销今日打卡</Text>
+            </TouchableOpacity>
+          )}
+        </View>
+        <CheckinButton
+          checked={doneToday}
+          color={habit.color}
+          onPress={handleCheckin}
+          label={!doneToday && todayTimes > 0 ? String(todayTimes) : undefined}
+        />
       </View>
 
       {/* Stats cards */}
@@ -165,8 +257,17 @@ export default function DetailScreen() {
         <>
           {records.map((record) => (
             <View key={record.id} style={styles.recordItem}>
-              <Ionicons name="checkmark-circle" size={20} color={habit.color} />
+              <Ionicons
+                name={record.recordType === 'freeze' ? 'shield-checkmark' : 'checkmark-circle'}
+                size={20}
+                color={record.recordType === 'freeze' ? '#F39C12' : habit.color}
+              />
               <Text style={styles.recordDate}>{record.date}</Text>
+              {record.recordType === 'freeze' ? (
+                <Text style={styles.recordTimes}>保护卡</Text>
+              ) : (record.times ?? 1) > 1 ? (
+                <Text style={styles.recordTimes}>{record.times} 次</Text>
+              ) : null}
               {record.note && <Text style={styles.recordNote}>{record.note}</Text>}
             </View>
           ))}
@@ -196,6 +297,17 @@ const styles = StyleSheet.create({
   header: { alignItems: 'center', marginBottom: 24 },
   headerIcon: { width: 64, height: 64, borderRadius: 20, justifyContent: 'center', alignItems: 'center', marginBottom: 10 },
   headerName: { fontSize: 20, fontWeight: '700', color: '#333' },
+  headerTarget: { fontSize: 13, color: '#888', marginTop: 4 },
+  freezeRow: { flexDirection: 'row', alignItems: 'center', gap: 4, marginTop: 8, paddingHorizontal: 10 },
+  freezeText: { fontSize: 12, color: '#999' },
+  checkinCard: {
+    flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center',
+    backgroundColor: '#fff', borderRadius: 14, padding: 16, marginBottom: 16,
+  },
+  checkinLeft: { flex: 1, gap: 4 },
+  checkinDate: { fontSize: 14, fontWeight: '700', color: '#333' },
+  checkinStatus: { fontSize: 13 },
+  undoText: { fontSize: 12, color: '#aaa', textDecorationLine: 'underline' },
   targetTimeRow: { flexDirection: 'row', alignItems: 'center', gap: 4, marginTop: 6 },
   targetTimeText: { fontSize: 13, color: '#4A90D9', fontWeight: '500' },
   statsRow: { flexDirection: 'row', marginBottom: 24 },
@@ -210,6 +322,7 @@ const styles = StyleSheet.create({
     backgroundColor: '#fff', borderRadius: 10, padding: 12, marginBottom: 6,
   },
   recordDate: { fontSize: 14, color: '#333', fontWeight: '500' },
+  recordTimes: { fontSize: 12, color: '#F39C12', fontWeight: '600' },
   recordNote: { fontSize: 13, color: '#888' },
   emptyText: { fontSize: 14, color: '#aaa', textAlign: 'center', marginTop: 20 },
   loadMoreBtn: {

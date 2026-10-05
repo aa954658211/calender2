@@ -1,11 +1,13 @@
 import React, { useState } from 'react';
 import {
   View, Text, StyleSheet, ScrollView, TouchableOpacity,
-  Alert, ActivityIndicator,
+  Alert, ActivityIndicator, Switch,
 } from 'react-native';
+import Constants from 'expo-constants';
 import { Ionicons } from '@expo/vector-icons';
 import { useHabitStore } from '../../src/stores/habitStore';
 import { useCheckinStore } from '../../src/stores/checkinStore';
+import { useSettingsStore } from '../../src/stores/settingsStore';
 import { notificationService } from '../../src/services/notificationService';
 import { exportService } from '../../src/services/exportService';
 import { ConfirmDialog } from '../../src/components/ConfirmDialog';
@@ -16,6 +18,8 @@ export default function SettingsScreen() {
   const [showImportDialog, setShowImportDialog] = useState(false);
   const [exporting, setExporting] = useState<'json' | 'csv' | null>(null);
   const [importing, setImporting] = useState(false);
+  const settings = useSettingsStore((s) => s.settings);
+  const updateSettings = useSettingsStore((s) => s.updateSettings);
 
   // 导入/清除后同步刷新内存中的 store 状态
   const refreshStores = async () => {
@@ -106,6 +110,50 @@ export default function SettingsScreen() {
         </View>
       </View>
 
+      {/* 补卡与保护卡 */}
+      <View style={styles.section}>
+        <Text style={styles.sectionTitle}>补卡与保护卡</Text>
+        <View style={styles.row}>
+          <View style={styles.rowLeft}>
+            <Ionicons name="time-outline" size={22} color="#4A90D9" />
+            <Text style={styles.rowText}>允许补卡</Text>
+          </View>
+          <Switch
+            value={settings.makeupEnabled}
+            onValueChange={(v) => updateSettings({ makeupEnabled: v })}
+            trackColor={{ true: '#4A90D9', false: '#ddd' }}
+          />
+        </View>
+        {settings.makeupEnabled && (
+          <View style={styles.row}>
+            <View style={styles.rowLeft}>
+              <Ionicons name="calculator-outline" size={22} color="#4A90D9" />
+              <Text style={styles.rowText}>每月补卡额度</Text>
+            </View>
+            <View style={styles.quotaStepper}>
+              <TouchableOpacity
+                style={styles.stepperBtn}
+                onPress={() => updateSettings({ makeupQuota: Math.max(0, settings.makeupQuota - 1) })}
+                disabled={settings.makeupQuota <= 0}
+              >
+                <Text style={[styles.stepperBtnText, settings.makeupQuota <= 0 && { color: '#ccc' }]}>−</Text>
+              </TouchableOpacity>
+              <Text style={styles.stepperValue}>{settings.makeupQuota} 次</Text>
+              <TouchableOpacity
+                style={styles.stepperBtn}
+                onPress={() => updateSettings({ makeupQuota: Math.min(28, settings.makeupQuota + 1) })}
+                disabled={settings.makeupQuota >= 28}
+              >
+                <Text style={[styles.stepperBtnText, settings.makeupQuota >= 28 && { color: '#ccc' }]}>＋</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        )}
+        <Text style={styles.reliabilityHint}>
+          开启后可在日历页点击过去日期补打卡，每月次数有限、自动按自然月重置；连续打卡每满 7 天可获得 1 张保护卡，使用保护卡可填补漏打卡日、维持连续记录。
+        </Text>
+      </View>
+
       {/* Data section */}
       <View style={styles.section}>
         <Text style={styles.sectionTitle}>数据管理</Text>
@@ -175,7 +223,7 @@ export default function SettingsScreen() {
             <Ionicons name="information-circle-outline" size={22} color="#888" />
             <Text style={styles.rowText}>版本</Text>
           </View>
-          <Text style={styles.versionText}>1.0.0</Text>
+          <Text style={styles.versionText}>{Constants.expoConfig?.version ?? '1.0.1'}</Text>
         </View>
       </View>
 
@@ -229,6 +277,13 @@ const styles = StyleSheet.create({
   rowText: { fontSize: 15, color: '#333' },
   timeDisplay: { flexDirection: 'row', alignItems: 'center', gap: 6 },
   timeText: { fontSize: 18, fontWeight: '600', color: '#4A90D9' },
+  quotaStepper: { flexDirection: 'row', alignItems: 'center', gap: 10 },
+  stepperBtn: {
+    width: 32, height: 32, borderRadius: 16, backgroundColor: '#f0f4ff',
+    justifyContent: 'center', alignItems: 'center',
+  },
+  stepperBtnText: { fontSize: 18, color: '#4A90D9', fontWeight: '700' },
+  stepperValue: { fontSize: 15, fontWeight: '700', color: '#333', minWidth: 44, textAlign: 'center' },
   menuItem: {
     flexDirection: 'row',
     justifyContent: 'space-between',

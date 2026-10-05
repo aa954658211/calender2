@@ -30,7 +30,11 @@ async function initializeDatabase(database: SQLite.SQLiteDatabase) {
       archived INTEGER NOT NULL DEFAULT 0,
       reminder_enabled INTEGER NOT NULL DEFAULT 0,
       reminder_time TEXT,
-      reminder_days TEXT
+      reminder_days TEXT,
+      reminder_end_time TEXT,
+      daily_target INTEGER NOT NULL DEFAULT 1,
+      category TEXT,
+      freeze_cards INTEGER NOT NULL DEFAULT 0
     );
   `);
 
@@ -58,6 +62,30 @@ async function initializeDatabase(database: SQLite.SQLiteDatabase) {
     // Column already exists, ignore
   }
 
+  // Migration: reminder time-span end time for multi-count habits
+  try {
+    await database.execAsync(`ALTER TABLE habits ADD COLUMN reminder_end_time TEXT`);
+  } catch (_) {
+    // Column already exists, ignore
+  }
+
+  // Migration: daily multi-count, grouping and freeze cards
+  try {
+    await database.execAsync(`ALTER TABLE habits ADD COLUMN daily_target INTEGER NOT NULL DEFAULT 1`);
+  } catch (_) {
+    // Column already exists, ignore
+  }
+  try {
+    await database.execAsync(`ALTER TABLE habits ADD COLUMN category TEXT`);
+  } catch (_) {
+    // Column already exists, ignore
+  }
+  try {
+    await database.execAsync(`ALTER TABLE habits ADD COLUMN freeze_cards INTEGER NOT NULL DEFAULT 0`);
+  } catch (_) {
+    // Column already exists, ignore
+  }
+
   // Create checkin_records table
   await database.execAsync(`
     CREATE TABLE IF NOT EXISTS checkin_records (
@@ -66,9 +94,23 @@ async function initializeDatabase(database: SQLite.SQLiteDatabase) {
       date TEXT NOT NULL,
       note TEXT,
       created_at TEXT NOT NULL,
+      times INTEGER NOT NULL DEFAULT 1,
+      record_type TEXT NOT NULL DEFAULT 'checkin',
       FOREIGN KEY (habit_id) REFERENCES habits(id) ON DELETE CASCADE
     );
   `);
+
+  // Migration: per-record count and freeze/checkin type
+  try {
+    await database.execAsync(`ALTER TABLE checkin_records ADD COLUMN times INTEGER NOT NULL DEFAULT 1`);
+  } catch (_) {
+    // Column already exists, ignore
+  }
+  try {
+    await database.execAsync(`ALTER TABLE checkin_records ADD COLUMN record_type TEXT NOT NULL DEFAULT 'checkin'`);
+  } catch (_) {
+    // Column already exists, ignore
+  }
 
   // Create indexes
   await database.execAsync(`

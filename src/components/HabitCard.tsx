@@ -6,7 +6,7 @@ import type { Habit } from '../models/types';
 
 interface HabitCardProps {
   habit: Habit;
-  checked: boolean;
+  times: number; // 当日已完成次数
   onToggle: () => void;
   onLongPress?: () => void;
 }
@@ -18,8 +18,15 @@ function getDaysRemaining(targetDate: string): number | null {
   return Math.ceil((target.getTime() - now.getTime()) / (1000 * 60 * 60 * 24));
 }
 
-export function HabitCard({ habit, checked, onToggle, onLongPress }: HabitCardProps) {
+export function HabitCard({ habit, times, onToggle, onLongPress }: HabitCardProps) {
   const days = habit.targetTime ? getDaysRemaining(habit.targetTime) : null;
+  const target = habit.dailyTarget || 1;
+  const done = times >= target;
+  const isMulti = target > 1;
+
+  const statusText = isMulti
+    ? `${Math.min(times, target)}/${target} 次`
+    : done ? '已打卡' : '未打卡';
 
   return (
     <TouchableOpacity
@@ -31,11 +38,16 @@ export function HabitCard({ habit, checked, onToggle, onLongPress }: HabitCardPr
         <View style={[styles.iconContainer, { backgroundColor: habit.color + '20' }]}>
           <Ionicons name={habit.icon as any} size={24} color={habit.color} />
         </View>
-        <CheckinButton checked={checked} color={habit.color} onPress={onToggle} />
+        <CheckinButton
+          checked={done}
+          color={habit.color}
+          onPress={onToggle}
+          label={!done && times > 0 ? String(times) : undefined}
+        />
       </View>
       <Text style={styles.name} numberOfLines={1}>{habit.name}</Text>
-      <Text style={[styles.status, { color: checked ? habit.color : '#aaa' }]}>
-        {checked ? '已打卡' : '未打卡'}
+      <Text style={[styles.status, { color: done ? habit.color : '#aaa' }]}>
+        {statusText}
       </Text>
       {habit.targetTime && days !== null && (
         <View style={styles.targetRow}>

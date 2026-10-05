@@ -138,10 +138,12 @@ export const exportService = {
         );
         if (existing) { out.skipped++; continue; }
         await db.runAsync(
-          'INSERT INTO habits (id, name, icon, color, target_time, created_at, updated_at, archived, reminder_enabled, reminder_time, reminder_days) VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?)',
+          'INSERT INTO habits (id, name, icon, color, target_time, created_at, updated_at, archived, reminder_enabled, reminder_time, reminder_days, reminder_end_time, daily_target, category, freeze_cards) VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?, ?)',
           [h.id, h.name, h.icon ?? 'star', h.color ?? '#4A90D9', h.targetTime ?? null,
            h.createdAt ?? new Date().toISOString(), h.updatedAt ?? h.createdAt ?? new Date().toISOString(),
-           h.reminderEnabled ? 1 : 0, h.reminderTime ?? null, JSON.stringify(h.reminderDays ?? [])]
+           h.reminderEnabled ? 1 : 0, h.reminderTime ?? null, JSON.stringify(h.reminderDays ?? []),
+           h.reminderEndTime ?? null,
+           h.dailyTarget ?? 1, h.category ?? null, h.freezeCards ?? 0]
         );
         out.habits++;
       }
@@ -157,8 +159,9 @@ export const exportService = {
           continue;
         }
         await db.runAsync(
-          'INSERT INTO checkin_records (id, habit_id, date, note, created_at) VALUES (?, ?, ?, ?, ?)',
-          [r.id, r.habitId, r.date, r.note ?? null, r.createdAt ?? new Date().toISOString()]
+          'INSERT INTO checkin_records (id, habit_id, date, note, created_at, times, record_type) VALUES (?, ?, ?, ?, ?, ?, ?)',
+          [r.id, r.habitId, r.date, r.note ?? null, r.createdAt ?? new Date().toISOString(),
+           r.times ?? 1, r.recordType ?? 'checkin']
         );
         out.checkins++;
       }

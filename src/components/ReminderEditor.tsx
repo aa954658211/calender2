@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
   View, Text, StyleSheet, TouchableOpacity, Switch, Modal, ScrollView,
 } from 'react-native';
@@ -10,15 +10,21 @@ interface Props {
   time: string; // "HH:mm"
   days: number[]; // 0=周日...6=周六，空数组表示每天
   color: string;
-  onChange: (patch: { enabled?: boolean; time?: string; days?: number[] }) => void;
+  dailyTarget?: number; // 每日目标次数，>1 时显示提醒时段设置
+  endTime?: string | null; // "HH:mm" 时段结束，null 表示仅单点提醒
+  onChange: (patch: { enabled?: boolean; time?: string; days?: number[]; endTime?: string | null }) => void;
 }
 
 const HOURS = Array.from({ length: 24 }, (_, i) => i);
-const MINUTES = Array.from({ length: 12 }, (_, i) => i * 5); // 0,5,...,55
+const MINUTES = Array.from({ length: 60 }, (_, i) => i); // 0..59，精确到分钟
 
 function pad(n: number) {
   return String(n).padStart(2, '0');
 }
+
+// 滚轮选择器尺寸
+const ITEM_H = 44;
+const VISIBLE_ROWS = 5;
 
 function formatDaysLabel(days: number[]): string {
   if (days.length === 0 || days.length >= 7) return '每天';
@@ -27,11 +33,14 @@ function formatDaysLabel(days: number[]): string {
   return '每周' + sorted.map((d) => map.get(d)).join('、');
 }
 
-export function ReminderEditor({ enabled, time, days, color, onChange }: Props) {
+export function ReminderEditor({ enabled, time, days, color, dailyTarget = 1, endTime = null, onChange }: Props) {
   const parsed = parseReminderTime(time);
   const [showTimePicker, setShowTimePicker] = useState(false);
+  const [editingField, setEditingField] = useState<'start' | 'end'>('start');
   const [tempHour, setTempHour] = useState(parsed.hour);
   const [tempMinute, setTempMinute] = useState(parsed.minute);
+
+  const isMulti = dailyTarget > 1;
 
   useEffect(() => {
     const p = parseReminderTime(time);
@@ -39,20 +48,46 @@ export function ReminderEditor({ enabled, time, days, color, onChange }: Props) 
     setTempMinute(p.minute);
   }, [time]);
 
-  const openTimePicker = () => {
-    const p = parseReminderTime(time);
+  const openTimePicker = (field: 'start' | 'end') => {
+    const source = field === 'end' && endTime ? endTime : time;
+    const p = parseReminderTime(source);
     setTempHour(p.hour);
     setTempMinute(p.minute);
+    setEditingField(field);
     setShowTimePicker(true);
   };
 
   const handleTimeConfirm = () => {
     setShowTimePicker(false);
-    onChange({ time: `${pad(tempHour)}:${pad(tempMinute)}` });
+    const value = `${pad(tempHour)}:${pad(tempMinute)}`;
+    if (editingField === 'end') {
+      onChange({ endTime: value });
+    } else {
+      onChange({ time: value });
+    }
   };
 
-  const clampHour = (h: number) => (h < 0 ? 23 : h > 23 ? 0 : h);
-  const clampMinute = (m: number) => (m < 0 ? 59 : m > 59 ? 0 : m);
+  // 滚轮：打开时定位到当前值，滚动吸附后回写选中时分
+  const hourRef = useRef<ScrollView>(null);
+  const minuteRef = useRef<ScrollView>(null);
+
+  const alignWheel = (y: number, max: number) =>
+    Math.max(0, Math.min(max, Math.round(y / ITEM_H)));
+
+  const handleHourLayout = () => {
+    hourRef.current?.scrollTo({ y: tempHour * ITEM_H, animated: false });
+  };
+  const handleMinuteLayout = () => {
+    minuteRef.current?.scrollTo({ y: tempMinute * ITEM_H, animated: false });
+  };
+  const handleHourScroll = (y: number) => {
+    const h = alignWheel(y, 23);
+    setTempHour((prev) => (prev === h ? prev : h));
+  };
+  const handleMinuteScroll = (y: number) => {
+    const m = alignWheel(y, 59);
+    setTempMinute((prev) => (prev === m ? prev : m));
+  };
 
   const toggleDay = (value: number) => {
     // 当前视为「每天」（空或全选）时，点击某个星期切换为「除该天外的其它天」
@@ -102,13 +137,38 @@ export function ReminderEditor({ enabled, time, days, color, onChange }: Props) 
       {enabled && (
         <>
           {/* 时间 */}
-          <TouchableOpacity style={styles.timeRow} onPress={openTimePicker}>
+          <TouchableOpacity style={styles.timeRow} onPress={() => openTimePicker('start')}>
             <View style={styles.headerLeft}>
               <Ionicons name="time-outline" size={18} color={color} />
-              <Text style={styles.timeLabel}>提醒时间</Text>
+              <Text style={styles.timeLabel}>{isMulti ? '提醒时段开始' : '提醒时间'}</Text>
             </View>
             <Text style={[styles.timeValue, { color }]}>{time}</Text>
           </TouchableOpacity>
+
+          {/* 多次打卡：时段结束 */}
+          {isMulti && (
+            <View style={styles.timeRow}>
+              <TouchableOpacity
+                style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}
+                onPress={() => openTimePicker('end')}
+              >
+                <Ionicons name="hourglass-outline" size={18} color={endTime ? color : '#bbb'} />
+                <Text style={[styles.timeLabel, { color: endTime ? '#333' : '#bbb' }]}>提醒时段结束</Text>
+              </TouchableOpacity>
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                {endTime ? (
+                  <TouchableOpacity onPress={() => onChange({ endTime: null })} hitSlop={8}>
+                    <Ionicons name="close-circle" size={18} color="#ccc" />
+                  </TouchableOpacity>
+                ) : null}
+                <TouchableOpacity onPress={() => openTimePicker('end')}>
+                  <Text style={[styles.timeValue, { color: endTime ? color : '#bbb' }]}>
+                    {endTime ?? '未设置'}
+                  </Text>
+                </TouchableOpacity>
+              </View>
+            </View>
+          )}
 
           {/* 快捷选择 */}
           <View style={styles.quickRow}>
@@ -142,89 +202,81 @@ export function ReminderEditor({ enabled, time, days, color, onChange }: Props) 
             })}
           </View>
 
-          <Text style={styles.summary}>将在「{formatDaysLabel(days)} {time}」提醒你打卡</Text>
+          {isMulti && endTime ? (
+            <Text style={styles.summary}>
+              将在「{formatDaysLabel(days)}」的 {time}–{endTime} 间均分提醒 {dailyTarget} 次，每次通知标注第几次
+            </Text>
+          ) : (
+            <Text style={styles.summary}>
+              将在「{formatDaysLabel(days)} {time}」提醒你打卡
+              {isMulti ? '（设置时段结束后可按次数多次提醒）' : ''}
+            </Text>
+          )}
         </>
       )}
 
-      {/* Time picker: tap-to-select grid */}
-      <Modal visible={showTimePicker} transparent animationType="fade">
+      {/* Time picker: 滚动式轮盘，惯性滑动 + 吸附到行 */}
+      <Modal visible={showTimePicker} transparent animationType="slide" onRequestClose={() => setShowTimePicker(false)}>
         <View style={styles.modalOverlay}>
-          <View style={[styles.modalContent, { maxHeight: '86%' }]}>
+          <View style={styles.modalContent}>
             <View style={styles.modalHeader}>
               <TouchableOpacity onPress={() => setShowTimePicker(false)}>
                 <Text style={styles.modalCancelText}>取消</Text>
               </TouchableOpacity>
-              <Text style={styles.modalTitle}>选择提醒时间</Text>
+              <Text style={styles.modalTitle}>{editingField === 'end' ? '选择时段结束时间' : '选择提醒时间'}</Text>
               <TouchableOpacity onPress={handleTimeConfirm}>
                 <Text style={[styles.modalConfirmText, { color }]}>确认</Text>
               </TouchableOpacity>
             </View>
 
-            {/* 大号时间预览 */}
+            {/* 大号时间预览，随滚轮实时变化 */}
             <Text style={[styles.bigTime, { color }]}>{pad(tempHour)} : {pad(tempMinute)}</Text>
 
-            {/* 步进微调：可精确到任意分钟 */}
-            <View style={styles.stepperRow}>
-              <View style={styles.stepperGroup}>
-                <TouchableOpacity style={styles.stepBtn} onPress={() => setTempHour(clampHour(tempHour - 1))}>
-                  <Ionicons name="remove" size={22} color={color} />
-                </TouchableOpacity>
-                <View style={styles.stepValueWrap}>
-                  <Text style={styles.stepValue}>{pad(tempHour)}</Text>
-                  <Text style={styles.stepUnit}>时</Text>
-                </View>
-                <TouchableOpacity style={styles.stepBtn} onPress={() => setTempHour(clampHour(tempHour + 1))}>
-                  <Ionicons name="add" size={22} color={color} />
-                </TouchableOpacity>
+            <View style={styles.wheelRow}>
+              <View style={styles.wheelCol}>
+                <ScrollView
+                  ref={hourRef}
+                  onLayout={handleHourLayout}
+                  style={styles.wheelBox}
+                  contentContainerStyle={{ paddingVertical: ITEM_H * ((VISIBLE_ROWS - 1) / 2) }}
+                  snapToInterval={ITEM_H}
+                  decelerationRate="fast"
+                  showsVerticalScrollIndicator={false}
+                  scrollEventThrottle={16}
+                  onScroll={(e) => handleHourScroll(e.nativeEvent.contentOffset.y)}
+                >
+                  {HOURS.map((h) => (
+                    <View key={`h-${h}`} style={styles.wheelItem}>
+                      <Text style={[styles.wheelText, h === tempHour && styles.wheelTextActive]}>{pad(h)}</Text>
+                    </View>
+                  ))}
+                </ScrollView>
+                <View pointerEvents="none" style={[styles.wheelSelector, { borderColor: color }]} />
+                <Text style={styles.wheelUnit}>时</Text>
               </View>
 
-              <View style={styles.stepperGroup}>
-                <TouchableOpacity style={styles.stepBtn} onPress={() => setTempMinute(clampMinute(tempMinute - 1))}>
-                  <Ionicons name="remove" size={22} color={color} />
-                </TouchableOpacity>
-                <View style={styles.stepValueWrap}>
-                  <Text style={styles.stepValue}>{pad(tempMinute)}</Text>
-                  <Text style={styles.stepUnit}>分</Text>
-                </View>
-                <TouchableOpacity style={styles.stepBtn} onPress={() => setTempMinute(clampMinute(tempMinute + 1))}>
-                  <Ionicons name="add" size={22} color={color} />
-                </TouchableOpacity>
+              <View style={styles.wheelCol}>
+                <ScrollView
+                  ref={minuteRef}
+                  onLayout={handleMinuteLayout}
+                  style={styles.wheelBox}
+                  contentContainerStyle={{ paddingVertical: ITEM_H * ((VISIBLE_ROWS - 1) / 2) }}
+                  snapToInterval={ITEM_H}
+                  decelerationRate="fast"
+                  showsVerticalScrollIndicator={false}
+                  scrollEventThrottle={16}
+                  onScroll={(e) => handleMinuteScroll(e.nativeEvent.contentOffset.y)}
+                >
+                  {MINUTES.map((m) => (
+                    <View key={`m-${m}`} style={styles.wheelItem}>
+                      <Text style={[styles.wheelText, m === tempMinute && styles.wheelTextActive]}>{pad(m)}</Text>
+                    </View>
+                  ))}
+                </ScrollView>
+                <View pointerEvents="none" style={[styles.wheelSelector, { borderColor: color }]} />
+                <Text style={styles.wheelUnit}>分</Text>
               </View>
             </View>
-
-            <ScrollView contentContainerStyle={styles.gridScroll}>
-              <Text style={styles.gridLabel}>小时</Text>
-              <View style={styles.grid}>
-                {HOURS.map((h) => {
-                  const active = h === tempHour;
-                  return (
-                    <TouchableOpacity
-                      key={`h-${h}`}
-                      style={[styles.gridCell, active && { backgroundColor: color }]}
-                      onPress={() => setTempHour(h)}
-                    >
-                      <Text style={[styles.gridCellText, active && styles.gridCellTextActive]}>{pad(h)}</Text>
-                    </TouchableOpacity>
-                  );
-                })}
-              </View>
-
-              <Text style={styles.gridLabel}>分钟</Text>
-              <View style={styles.grid}>
-                {MINUTES.map((m) => {
-                  const active = m === tempMinute;
-                  return (
-                    <TouchableOpacity
-                      key={`m-${m}`}
-                      style={[styles.gridCell, active && { backgroundColor: color }]}
-                      onPress={() => setTempMinute(m)}
-                    >
-                      <Text style={[styles.gridCellText, active && styles.gridCellTextActive]}>{pad(m)}</Text>
-                    </TouchableOpacity>
-                  );
-                })}
-              </View>
-            </ScrollView>
           </View>
         </View>
       </Modal>
@@ -272,23 +324,17 @@ const styles = StyleSheet.create({
   modalCancelText: { fontSize: 15, color: '#999' },
   modalTitle: { fontSize: 16, fontWeight: '700', color: '#333' },
   modalConfirmText: { fontSize: 15, fontWeight: '600' },
-  bigTime: { fontSize: 34, fontWeight: '700', textAlign: 'center', marginTop: 16 },
-  stepperRow: { flexDirection: 'row', justifyContent: 'center', gap: 28, marginVertical: 12 },
-  stepperGroup: { flexDirection: 'row', alignItems: 'center', gap: 10 },
-  stepBtn: {
-    width: 40, height: 40, borderRadius: 20, backgroundColor: '#f2f3f5',
-    justifyContent: 'center', alignItems: 'center',
+  bigTime: { fontSize: 34, fontWeight: '700', textAlign: 'center', marginTop: 12, marginBottom: 4 },
+  // 滚轮选择器
+  wheelRow: { flexDirection: 'row', justifyContent: 'center', gap: 36, paddingVertical: 8 },
+  wheelCol: { alignItems: 'center' },
+  wheelBox: { height: ITEM_H * VISIBLE_ROWS, width: 76 },
+  wheelItem: { height: ITEM_H, justifyContent: 'center', alignItems: 'center' },
+  wheelText: { fontSize: 20, color: '#aaa', fontWeight: '500' },
+  wheelTextActive: { fontSize: 24, color: '#333', fontWeight: '800' },
+  wheelSelector: {
+    position: 'absolute', top: ITEM_H * ((VISIBLE_ROWS - 1) / 2), left: 0, right: 0,
+    height: ITEM_H, borderWidth: 1.5, borderRadius: 10, backgroundColor: 'rgba(0,0,0,0.03)',
   },
-  stepValueWrap: { alignItems: 'center', minWidth: 48 },
-  stepValue: { fontSize: 26, fontWeight: '700', color: '#333' },
-  stepUnit: { fontSize: 12, color: '#999', marginTop: -2 },
-  gridScroll: { paddingHorizontal: 16 },
-  gridLabel: { fontSize: 13, color: '#999', marginBottom: 8, marginTop: 4 },
-  grid: { flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'space-between' },
-  gridCell: {
-    width: '22%', height: 44, borderRadius: 10, backgroundColor: '#f2f3f5',
-    justifyContent: 'center', alignItems: 'center', marginBottom: 10,
-  },
-  gridCellText: { fontSize: 17, color: '#555', fontWeight: '600' },
-  gridCellTextActive: { color: '#fff', fontWeight: '700' },
+  wheelUnit: { fontSize: 13, color: '#999', marginTop: 6 },
 });

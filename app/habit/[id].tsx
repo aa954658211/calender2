@@ -11,6 +11,7 @@ import { HabitIconPicker } from '../../src/components/HabitIconPicker';
 import { ColorPicker } from '../../src/components/ColorPicker';
 import { HabitCard } from '../../src/components/HabitCard';
 import { ReminderEditor } from '../../src/components/ReminderEditor';
+import { PRESET_CATEGORIES } from '../../src/utils/constants';
 
 const ITEM_HEIGHT = 44;
 
@@ -51,6 +52,14 @@ export default function EditHabitScreen() {
   const [reminderEnabled, setReminderEnabled] = useState(habit?.reminderEnabled ?? false);
   const [reminderTime, setReminderTime] = useState(habit?.reminderTime ?? '20:00');
   const [reminderDays, setReminderDays] = useState<number[]>(habit?.reminderDays ?? []);
+  const [reminderEndTime, setReminderEndTime] = useState<string | null>(habit?.reminderEndTime ?? null);
+  const [dailyTarget, setDailyTarget] = useState(habit?.dailyTarget ?? 1);
+  const [category, setCategory] = useState<string | null>(
+    habit?.category && PRESET_CATEGORIES.includes(habit.category) ? habit.category : null
+  );
+  const [customCategory, setCustomCategory] = useState(
+    habit?.category && !PRESET_CATEGORIES.includes(habit.category) ? habit.category : ''
+  );
 
   const yearRef = useRef<FlatList>(null);
   const monthRef = useRef<FlatList>(null);
@@ -71,6 +80,7 @@ export default function EditHabitScreen() {
       return;
     }
     const targetTime = enableTarget ? formatDate(targetYear, targetMonth, targetDay) : null;
+    const finalCategory = customCategory.trim() || category;
     await updateHabit(habit.id, {
       name: name.trim(),
       icon,
@@ -79,6 +89,9 @@ export default function EditHabitScreen() {
       reminderEnabled,
       reminderTime,
       reminderDays,
+      reminderEndTime: dailyTarget > 1 ? reminderEndTime : null,
+      dailyTarget,
+      category: finalCategory,
     });
     router.back();
   };
@@ -108,6 +121,62 @@ export default function EditHabitScreen() {
         <HabitIconPicker selectedIcon={icon} onSelect={setIcon} color={color} />
         <ColorPicker selectedColor={color} onSelect={setColor} />
 
+        {/* Daily target times */}
+        <Text style={styles.label}>每日目标次数</Text>
+        <View style={styles.stepperSection}>
+          <View style={styles.stepperRow}>
+            <TouchableOpacity
+              style={styles.stepperBtn}
+              onPress={() => setDailyTarget((v) => Math.max(1, v - 1))}
+              disabled={dailyTarget <= 1}
+            >
+              <Text style={[styles.stepperBtnText, dailyTarget <= 1 && styles.stepperBtnDisabled]}>−</Text>
+            </TouchableOpacity>
+            <Text style={styles.stepperValue}>
+              {dailyTarget === 1 ? '每天 1 次（普通打卡）' : `每天 ${dailyTarget} 次`}
+            </Text>
+            <TouchableOpacity
+              style={styles.stepperBtn}
+              onPress={() => setDailyTarget((v) => Math.min(20, v + 1))}
+              disabled={dailyTarget >= 20}
+            >
+              <Text style={[styles.stepperBtnText, dailyTarget >= 20 && styles.stepperBtnDisabled]}>＋</Text>
+            </TouchableOpacity>
+          </View>
+          {dailyTarget > 1 && (
+            <Text style={styles.targetHint}>适合喝水、背单词等一天要完成多次的项目，首页会显示 n/{dailyTarget} 进度</Text>
+          )}
+        </View>
+
+        {/* Category */}
+        <Text style={styles.label}>分组标签</Text>
+        <View style={styles.categorySection}>
+          <View style={styles.categoryRow}>
+            <TouchableOpacity
+              style={[styles.categoryChip, !category && !customCategory.trim() && styles.categoryChipActive]}
+              onPress={() => { setCategory(null); setCustomCategory(''); }}
+            >
+              <Text style={[styles.categoryChipText, !category && !customCategory.trim() && { color: '#4A90D9', fontWeight: '700' }]}>未分组</Text>
+            </TouchableOpacity>
+            {PRESET_CATEGORIES.map((c) => (
+              <TouchableOpacity
+                key={c}
+                style={[styles.categoryChip, category === c && styles.categoryChipActive]}
+                onPress={() => { setCategory(c); setCustomCategory(''); }}
+              >
+                <Text style={[styles.categoryChipText, category === c && { color: '#4A90D9', fontWeight: '700' }]}>{c}</Text>
+              </TouchableOpacity>
+            ))}
+          </View>
+          <TextInput
+            style={styles.customCategoryInput}
+            placeholder="自定义分组（可选，填写后优先于上方选择）"
+            value={customCategory}
+            onChangeText={setCustomCategory}
+            maxLength={10}
+          />
+        </View>
+
         <Text style={styles.label}>目标日期</Text>
         <View style={styles.targetSection}>
           <View style={styles.targetRow}>
@@ -133,18 +202,21 @@ export default function EditHabitScreen() {
           time={reminderTime}
           days={reminderDays}
           color={color}
+          dailyTarget={dailyTarget}
+          endTime={reminderEndTime}
           onChange={(patch) => {
             if (patch.enabled !== undefined) setReminderEnabled(patch.enabled);
             if (patch.time !== undefined) setReminderTime(patch.time);
             if (patch.days !== undefined) setReminderDays(patch.days);
+            if (patch.endTime !== undefined) setReminderEndTime(patch.endTime);
           }}
         />
 
         <Text style={styles.label}>预览效果</Text>
         <View style={styles.previewWrap}>
           <HabitCard
-            habit={{ ...habit, name: name || habit.name, icon, color, targetTime: enableTarget ? formatDate(targetYear, targetMonth, targetDay) : null, reminderEnabled, reminderTime, reminderDays }}
-            checked={false}
+            habit={{ ...habit, name: name || habit.name, icon, color, targetTime: enableTarget ? formatDate(targetYear, targetMonth, targetDay) : null, reminderEnabled, reminderTime, reminderDays, reminderEndTime, dailyTarget, category: customCategory.trim() || category }}
+            times={0}
             onToggle={() => {}}
           />
         </View>
@@ -264,6 +336,31 @@ const styles = StyleSheet.create({
   },
   dateButtonText: { fontSize: 17, fontWeight: '700', color: '#4A90D9' },
   targetHint: { fontSize: 13, color: '#aaa', marginTop: 8 },
+  stepperSection: {
+    backgroundColor: '#fff', borderRadius: 12, padding: 14, marginBottom: 20, borderWidth: 1, borderColor: '#eee',
+  },
+  stepperRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+  stepperBtn: {
+    width: 40, height: 40, borderRadius: 20, backgroundColor: '#f0f4ff',
+    justifyContent: 'center', alignItems: 'center',
+  },
+  stepperBtnText: { fontSize: 20, color: '#4A90D9', fontWeight: '700' },
+  stepperBtnDisabled: { color: '#ccc' },
+  stepperValue: { fontSize: 16, fontWeight: '600', color: '#333' },
+  categorySection: {
+    backgroundColor: '#fff', borderRadius: 12, padding: 14, marginBottom: 20, borderWidth: 1, borderColor: '#eee',
+  },
+  categoryRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
+  categoryChip: {
+    paddingHorizontal: 14, paddingVertical: 7, borderRadius: 16,
+    backgroundColor: '#f5f6f8', borderWidth: 1, borderColor: '#eee',
+  },
+  categoryChipActive: { backgroundColor: '#4A90D920', borderColor: '#4A90D9' },
+  categoryChipText: { fontSize: 13, color: '#666' },
+  customCategoryInput: {
+    marginTop: 10, backgroundColor: '#f7f8fa', borderRadius: 8, paddingHorizontal: 12,
+    paddingVertical: 8, fontSize: 13, borderWidth: 1, borderColor: '#eee',
+  },
   previewWrap: { marginBottom: 24 },
   saveBtn: { borderRadius: 14, paddingVertical: 16, alignItems: 'center' },
   saveBtnText: { color: '#fff', fontSize: 17, fontWeight: '700' },
